@@ -20,7 +20,7 @@ beyond the Adafruit sensor libraries.
 On the Pi:
 
     sudo apt-get install -y git
-    git clone <this repo's URL> bme-tracker
+    git clone https://github.com/nathanbent/bme-tracker
     cd bme-tracker
     bash install.sh
 
