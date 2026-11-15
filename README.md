@@ -58,7 +58,10 @@ Each minute's row is written as:
 
     environment,location=<name>,sensor=bme680 temp_c=..,humidity=..,pressure_hpa=..,gas_ohms=..,aq_score=.. <time>
 
-(a BME280 sends only the first three fields). Rows are pushed from the local
+(a BME280 sends only the first three fields). The measurement name, the
+`location` tag name and every field name can be changed to match data you
+already have: see `measurement`, `location_tag` and `[influxdb_fields]` in
+`config.example.ini`. Rows are pushed from the local
 database, so anything logged while InfluxDB was down, or before you switched
 this on, is delivered when the connection works. Check with
 `journalctl -u bme-tracker -f`; you should see `influxdb: connected`.

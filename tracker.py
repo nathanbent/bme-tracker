@@ -11,6 +11,7 @@ every row to InfluxDB.
 import argparse
 import base64
 import configparser
+import hashlib
 import json
 import math
 import random
@@ -218,10 +219,20 @@ class Influx:
     unreachable - or before this was switched on - are sent when it is back.
     """
 
-    def __init__(self, cfg, name, sensor_kind, fahrenheit=False):
+    def __init__(self, cfg, name, sensor_kind, fahrenheit=False, field_names=None):
         self.fahrenheit = fahrenheit
-        self.measurement = lp_escape(cfg.get("measurement", "environment"))
-        self.tags = f"location={lp_escape(name)},sensor={lp_escape(sensor_kind)}"
+        self.measurement = lp_escape(cfg.get("measurement") or "environment")
+        tag = lp_escape(cfg.get("location_tag") or "location")
+        self.tags = f"{tag}={lp_escape(name)},sensor={lp_escape(sensor_kind)}"
+        # our field -> name in InfluxDB; an empty name means "do not send"
+        names = {"temperature": "temp_f" if fahrenheit else "temp_c",
+                 **{f: f for f in FIELDS[1:]}}
+        for k, v in (field_names or {}).items():
+            if k not in names:
+                raise SystemExit(f"[influxdb_fields] unknown field {k!r}; "
+                                 f"choose from {', '.join(names)}")
+            names[k] = lp_escape(v.strip())
+        self.names = [names["temperature"]] + [names[f] for f in FIELDS[1:]]
         url = cfg["url"].rstrip("/")
         self.headers = {"Content-Type": "text/plain; charset=utf-8"}
         if cfg.get("bucket"):                     # InfluxDB 2.x / 3.x
@@ -238,15 +249,16 @@ class Influx:
                 self.headers["Authorization"] = "Basic " + base64.b64encode(cred).decode()
         else:
             raise SystemExit("[influxdb] needs `bucket` (v2/v3) or `database` (v1)")
-        # resend everything if the target or the temperature unit changes
-        self.key = "influx_last_ts:" + self.url + (":F" if fahrenheit else "")
+        # resend everything if the target, unit or naming changes
+        schema = "|".join([self.url, self.measurement, tag, str(fahrenheit)] + self.names)
+        self.key = "influx_last_ts:" + hashlib.sha1(schema.encode()).hexdigest()[:12]
 
     def line(self, row):
-        values = dict(zip(FIELDS, row[1:]))
-        if self.fahrenheit:   # the local database always stays in Celsius
-            c = values.pop("temp_c")
-            values = {"temp_f": None if c is None else round(c * 9 / 5 + 32, 2), **values}
-        fields = ",".join(f"{f}={v}" for f, v in values.items() if v is not None)
+        values = list(row[1:])
+        if self.fahrenheit and values[0] is not None:   # the local database stays in Celsius
+            values[0] = round(values[0] * 9 / 5 + 32, 2)
+        fields = ",".join(f"{n}={v}" for n, v in zip(self.names, values)
+                          if n and v is not None)
         return f"{self.measurement},{self.tags} {fields} {row[0]}" if fields else None
 
     def push_pending(self, con):
@@ -398,7 +410,9 @@ def main():
     threading.Thread(target=sampler, daemon=True, args=(
         db_path, sensor, float(sens.get("sample_every", 5)), stop)).start()
     if cfg.has_section("influxdb") and cfg["influxdb"].get("url"):
-        influx = Influx(cfg["influxdb"], name, sensor.kind, fahrenheit=unit == "F")
+        influx = Influx(cfg["influxdb"], name, sensor.kind, fahrenheit=unit == "F",
+                        field_names=dict(cfg["influxdb_fields"])
+                        if cfg.has_section("influxdb_fields") else None)
         threading.Thread(target=influx.run, daemon=True, args=(db_path, stop)).start()
     info = {"name": name, "sensor": sensor.kind.upper(), "unit": unit}
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(db_path, info))
