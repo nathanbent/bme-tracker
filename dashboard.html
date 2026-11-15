@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Climate tracker</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f4f3f0; --surface: #fcfcfb; --border: #e4e2dc;
+  --text: #0b0b0b; --text-2: #52514e; --text-3: #7a7872;
+  --grid: #e9e7e1; --series: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #111110; --surface: #1a1a19; --border: #2e2d2a;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #8f8d84;
+    --grid: #2a2927; --series: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text);
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; }
+#updated { color: var(--text-3); font-size: 13px; }
+.controls { margin-left: auto; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 13px; padding: 6px 11px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
+a { color: var(--text-2); font-size: 13px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.tile { padding: 12px 14px; }
+.tile .label { color: var(--text-2); font-size: 13px; }
+.tile .value { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile .value small { font-size: 14px; font-weight: 400; color: var(--text-2); margin-left: 3px; }
+.tile .note { color: var(--text-3); font-size: 12px; min-height: 17px; }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 12px; }
+.card { padding: 12px 14px 8px; position: relative; min-width: 0; }
+.card h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.card .sub { color: var(--text-3); font-size: 12px; margin-bottom: 4px; }
+svg { display: block; width: 100%; height: 190px; touch-action: pan-y; }
+svg text { fill: var(--text-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.hair { stroke: var(--text-3); stroke-width: 1; }
+.dot { fill: var(--series); stroke: var(--surface); stroke-width: 2; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px 9px; font-size: 12px; box-shadow: 0 2px 10px rgba(0,0,0,.12); white-space: nowrap; display: none; }
+.tip b { font-size: 14px; display: block; }
+.tip span { color: var(--text-2); }
+.empty { color: var(--text-3); font-size: 13px; padding: 70px 0; text-align: center; }
+footer { color: var(--text-3); font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">Climate tracker</h1>
+    <span id="updated">loading…</span>
+    <div class="controls">
+      <div class="seg" id="range" role="group" aria-label="Time range">
+        <button data-h="6">6h</button><button data-h="24">24h</button>
+        <button data-h="168">7d</button><button data-h="720">30d</button>
+      </div>
+      <div class="seg" id="unit" role="group" aria-label="Temperature unit">
+        <button data-u="C">°C</button><button data-u="F">°F</button>
+      </div>
+      <a href="/export.csv">Download CSV</a>
+    </div>
+  </header>
+  <section class="tiles" id="tiles"></section>
+  <section class="charts" id="charts"></section>
+  <footer id="aqnote" hidden>Air quality is a relative 0–100 score (higher is better): gas resistance compared with this
+    sensor's own clean-air level over the last 24 hours, plus a small humidity term. It needs about
+    30 minutes of data before it appears and is not a calibrated IAQ or CO₂ reading.</footer>
+</main>
+<script>
+const store = { get(k, d) { try { return localStorage.getItem(k) || d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+let hours = +store.get('hours', 24), unit = store.get('unit', 'C');
+let history = null, latest = null;
+
+const toUnit = c => unit === 'F' ? c * 9 / 5 + 32 : c;
+const aqWord = s => s >= 80 ? 'Good' : s >= 60 ? 'Fair' : s >= 40 ? 'Poor' : 'Bad';
+const METRICS = [
+  { key: 'temp_c', name: 'Temperature', unit: () => '°' + unit, conv: toUnit, dp: 1 },
+  { key: 'humidity', name: 'Humidity', unit: () => '%', dp: 1 },
+  { key: 'aq_score', gasOnly: true, name: 'Air quality', unit: () => '/100', dp: 0, note: aqWord,
+    sub: 'Relative score, higher is better' },
+  { key: 'gas_ohms', gasOnly: true, name: 'Gas resistance', unit: () => 'kΩ', conv: v => v / 1000, dp: 1,
+    sub: 'Drops when VOCs (cooking, solvents, breath) rise' },
+  { key: 'pressure_hpa', name: 'Pressure', unit: () => 'hPa', dp: 1 },
+];
+const val = (m, v) => v == null ? null : (m.conv ? m.conv(v) : v);
+const el = (tag, cls, text) => { const e = document.createElement(tag);
+  if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const svgEl = (tag, attrs) => { const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+
+// Gas and air quality only exist on a BME680; hide what this sensor never reports.
+const hasData = m => (latest && latest[m.key] != null) || (history && history[m.key].some(v => v != null));
+const shown = () => METRICS.filter(m => !m.gasOnly || hasData(m) || (latest && latest.sensor === 'BME680'));
+
+function renderTiles() {
+  const box = document.getElementById('tiles'); box.replaceChildren();
+  if (latest && latest.name) {
+    document.getElementById('title').textContent = latest.name;
+    document.title = latest.name + ' – ' + (latest.sensor || 'sensor');
+  }
+  document.getElementById('aqnote').hidden = !shown().some(m => m.gasOnly);
+  for (const m of shown()) {
+    const v = latest ? val(m, latest[m.key]) : null;
+    const t = el('div', 'tile');
+    t.append(el('div', 'label', m.name));
+    const value = el('div', 'value', v == null ? '–' : v.toFixed(m.dp));
+    if (v != null) value.append(el('small', '', m.unit()));
+    t.append(value, el('div', 'note', v != null && m.note ? m.note(v) : ''));
+    box.append(t);
+  }
+  const u = document.getElementById('updated');
+  if (!latest || !latest.ts) { u.textContent = 'no readings yet – the first one lands after a minute'; return; }
+  const age = Math.round(Date.now() / 1000 - latest.ts - 60);
+  u.textContent = age > 300 ? `last reading ${new Date(latest.ts * 1000).toLocaleString()} – logger may be down`
+                            : `updated ${new Date((latest.ts + 60) * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`;
+}
+
+function niceTicks(lo, hi, n) {
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(f => f * mag).find(s => s >= raw);
+  const ticks = [];
+  for (let v = Math.floor(lo / step) * step; v <= hi + step * 0.999; v += step) ticks.push(+v.toPrecision(12));
+  return { ticks, step };
+}
+const fmtTime = (ts, long) => { const d = new Date(ts * 1000);
+  const day = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  const tm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return long ? `${day}, ${tm}` : hours > 48 ? day : tm; };
+
+function renderChart(card, m) {
+  const svg = card.querySelector('svg'), tip = card.querySelector('.tip');
+  svg.replaceChildren();
+  const W = svg.clientWidth || 440, H = 190, L = 44, R = 10, T = 8, B = 22;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const pts = [];
+  history.ts.forEach((ts, i) => { const v = val(m, history[m.key][i]); if (v != null) pts.push([ts, v]); });
+  card.querySelector('.empty').style.display = pts.length ? 'none' : '';
+  svg.style.display = pts.length ? '' : 'none';
+  if (!pts.length) return;
+  const vs = pts.map(p => p[1]);
+  const { ticks, step } = niceTicks(Math.min(...vs), Math.max(...vs), 4);
+  const y0 = ticks[0], y1 = ticks[ticks.length - 1], x0 = history.from, x1 = history.to;
+  const X = t => L + (t - x0) / (x1 - x0) * (W - L - R);
+  const Y = v => T + (y1 - v) / (y1 - y0) * (H - T - B);
+  const dp = step >= 1 ? 0 : step >= 0.1 ? 1 : 2;
+  for (const t of ticks) {
+    svg.append(svgEl('line', { class: 'gridline', x1: L, x2: W - R, y1: Y(t), y2: Y(t) }));
+    const lab = svgEl('text', { x: L - 6, y: Y(t) + 4, 'text-anchor': 'end' }); lab.textContent = t.toFixed(dp); svg.append(lab);
+  }
+  const nx = W < 380 ? 3 : 5;
+  for (let i = 0; i < nx; i++) {
+    const t = x0 + (x1 - x0) * (i + 0.5) / nx;
+    const lab = svgEl('text', { x: X(t), y: H - 6, 'text-anchor': 'middle' }); lab.textContent = fmtTime(t); svg.append(lab);
+  }
+  let d = '', prev = null;                       // break the line across gaps in the data
+  for (const [ts, v] of pts) {
+    d += (prev == null || ts - prev > history.step * 2.5 ? 'M' : 'L') + X(ts).toFixed(1) + ' ' + Y(v).toFixed(1);
+    prev = ts;
+  }
+  svg.append(svgEl('path', { class: 'line', d }));
+  const hair = svgEl('line', { class: 'hair', y1: T, y2: H - B, visibility: 'hidden' });
+  const dot = svgEl('circle', { class: 'dot', r: 4.5, visibility: 'hidden' });
+  svg.append(hair, dot);
+  svg.onpointermove = e => {
+    const box = svg.getBoundingClientRect();
+    const t = x0 + (e.clientX - box.left - L) / (W - L - R) * (x1 - x0);
+    let best = pts[0];
+    for (const p of pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+    const px = X(best[0]), py = Y(best[1]);
+    hair.setAttribute('x1', px); hair.setAttribute('x2', px); hair.setAttribute('visibility', 'visible');
+    dot.setAttribute('cx', px); dot.setAttribute('cy', py); dot.setAttribute('visibility', 'visible');
+    tip.replaceChildren(el('b', '', `${best[1].toFixed(Math.max(m.dp, 1))} ${m.unit()}`), el('span', '', fmtTime(best[0], true)));
+    tip.style.display = 'block';
+    const cb = card.getBoundingClientRect(), tw = tip.offsetWidth, left = box.left - cb.left + px;
+    tip.style.left = (px > W / 2 ? left - tw - 10 : left + 10) + 'px';
+    tip.style.top = (box.top - cb.top + T) + 'px';
+  };
+  svg.onpointerleave = () => { hair.setAttribute('visibility', 'hidden'); dot.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; };
+}
+
+function renderCharts() {
+  if (!history) return;
+  const box = document.getElementById('charts');
+  const ms = shown();
+  if (box.children.length !== ms.length) { box.replaceChildren(); for (const m of ms) {
+    const c = el('div', 'card');
+    c.append(el('h2'), el('div', 'sub'), svgEl('svg', { role: 'img' }),
+             el('div', 'empty', 'No data in this range yet'), el('div', 'tip'));
+    box.append(c);
+  } }
+  ms.forEach((m, i) => {
+    const c = box.children[i];
+    c.querySelector('h2').textContent = `${m.name} (${m.unit()})`;
+    c.querySelector('.sub').textContent = m.sub || ' ';
+    c.querySelector('svg').setAttribute('aria-label', `${m.name} over time`);
+    renderChart(c, m);
+  });
+}
+
+function syncButtons() {
+  for (const b of document.querySelectorAll('#range button')) b.setAttribute('aria-pressed', +b.dataset.h === hours);
+  for (const b of document.querySelectorAll('#unit button')) b.setAttribute('aria-pressed', b.dataset.u === unit);
+}
+async function refresh() {
+  try {
+    [latest, history] = await Promise.all([
+      fetch('/api/latest').then(r => r.json()),
+      fetch('/api/history?hours=' + hours).then(r => r.json())]);
+    renderTiles(); renderCharts();
+  } catch { document.getElementById('updated').textContent = 'cannot reach the tracker'; }
+}
+document.getElementById('range').onclick = e => { if (!e.target.dataset.h) return;
+  hours = +e.target.dataset.h; store.set('hours', hours); syncButtons(); refresh(); };
+document.getElementById('unit').onclick = e => { if (!e.target.dataset.u) return;
+  unit = e.target.dataset.u; store.set('unit', unit); syncButtons(); renderTiles(); renderCharts(); };
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(renderCharts, 150); });
+syncButtons(); refresh(); setInterval(refresh, 60000);
+</script>
+</body>
+</html>

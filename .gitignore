@@ -1,0 +1,6 @@
+.venv/
+config.ini
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
