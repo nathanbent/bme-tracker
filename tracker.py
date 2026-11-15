@@ -60,13 +60,36 @@ class RealSensor:
                 except (RuntimeError, ValueError, OSError) as exc:
                     errors.append(f"  {k} at {addr:#x}: {exc}")
         raise SystemExit("No sensor found. Check wiring and `i2cdetect -y 1`.\n"
-                         + "\n".join(errors))
+                         + "\n".join(errors + raw_probe(addresses)))
 
     def read(self):
         d = self.dev
         gas = float(d.gas) if self.kind == "bme680" else None
         return (d.temperature + self.temp_offset, d.relative_humidity,
                 d.pressure, gas)
+
+
+CHIP_IDS = {0x61: "BME680", 0x60: "BME280",
+            0x58: "BMP280 - no humidity sensor, not supported"}
+
+
+def raw_probe(addresses, bus_num=1):
+    """Read the chip ID register directly, to show the real error when the
+    Adafruit drivers only say 'no device'."""
+    try:
+        from Adafruit_PureIO.smbus import SMBus
+        bus = SMBus(bus_num)
+    except Exception as exc:
+        return [f"  cannot open /dev/i2c-{bus_num}: {exc!r}"]
+    out = []
+    for addr in addresses:
+        try:
+            chip = bus.read_byte_data(addr, 0xD0)
+            out.append(f"  raw read at {addr:#x}: chip ID {chip:#x} "
+                       f"({CHIP_IDS.get(chip, 'unknown chip')})")
+        except Exception as exc:
+            out.append(f"  raw read at {addr:#x}: {exc!r}")
+    return out
 
 
 class FakeSensor:
@@ -331,9 +354,15 @@ def main():
                     help="settings file (default: config.ini next to this script)")
     ap.add_argument("--simulate", action="store_true",
                     help="fake sensor + 3 days of demo history, no hardware needed")
+    ap.add_argument("--probe", action="store_true",
+                    help="look for a sensor on the I2C bus, print what is found, and exit")
     ap.add_argument("--db", help="override the database path")
     ap.add_argument("--port", type=int, help="override the dashboard port")
     args = ap.parse_args()
+
+    if args.probe:
+        print("\n".join(raw_probe((0x76, 0x77))))
+        return
 
     cfg = configparser.ConfigParser(interpolation=None)
     cfg.read(args.config)

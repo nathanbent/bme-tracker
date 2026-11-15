@@ -1,2 +1,6 @@
 adafruit-circuitpython-bme680
 adafruit-circuitpython-bme280
+# Raspberry Pi platform libraries that Blinka needs but does not install itself
+gpiod>=2.2.2,<3
+Adafruit-Blinka-Raspberry-Pi-PWM>=1.0.2
+rpi_ws281x>=4.0.0
