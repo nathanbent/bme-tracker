@@ -6,6 +6,14 @@ Serves a dashboard on your local network and can push every reading to
 InfluxDB for Grafana. One process, one SQLite file, no Python dependencies
 beyond the Adafruit sensor libraries.
 
+## Supported sensors
+
+Any BME680 or BME280 breakout on I2C: the board maker does not matter, only
+the Bosch chip and its address, and both are auto-detected. Adafruit boards
+default to address 0x77; Pimoroni and most generic boards default to 0x76.
+`python3 tracker.py --probe` prints what is on the bus. BMP280 boards (no
+humidity sensor) are not supported.
+
 ## Wiring (I2C)
 
 | Sensor      | Pi header           |
