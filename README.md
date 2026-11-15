@@ -37,6 +37,8 @@ git-ignored, so tokens stay on the Pi. See `config.example.ini` for every
 option. The ones you are most likely to want:
 
 - `[tracker] name` - label for this Pi (default: hostname)
+- `[tracker] temperature_unit` - `C` (default) or `F`; with `F` the dashboard
+  defaults to Fahrenheit and InfluxDB gets a `temp_f` field instead of `temp_c`
 - `[sensor] type` - `auto` (default), `bme680` or `bme280`; `address` likewise
   auto-detects 0x77 / 0x76
 - `[sensor] temp_offset` - the sensors warm themselves and sit near the Pi, so

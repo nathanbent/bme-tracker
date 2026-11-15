@@ -218,7 +218,8 @@ class Influx:
     unreachable - or before this was switched on - are sent when it is back.
     """
 
-    def __init__(self, cfg, name, sensor_kind):
+    def __init__(self, cfg, name, sensor_kind, fahrenheit=False):
+        self.fahrenheit = fahrenheit
         self.measurement = lp_escape(cfg.get("measurement", "environment"))
         self.tags = f"location={lp_escape(name)},sensor={lp_escape(sensor_kind)}"
         url = cfg["url"].rstrip("/")
@@ -237,10 +238,15 @@ class Influx:
                 self.headers["Authorization"] = "Basic " + base64.b64encode(cred).decode()
         else:
             raise SystemExit("[influxdb] needs `bucket` (v2/v3) or `database` (v1)")
-        self.key = "influx_last_ts:" + self.url   # resend everything if the target changes
+        # resend everything if the target or the temperature unit changes
+        self.key = "influx_last_ts:" + self.url + (":F" if fahrenheit else "")
 
     def line(self, row):
-        fields = ",".join(f"{f}={v}" for f, v in zip(FIELDS, row[1:]) if v is not None)
+        values = dict(zip(FIELDS, row[1:]))
+        if self.fahrenheit:   # the local database always stays in Celsius
+            c = values.pop("temp_c")
+            values = {"temp_f": None if c is None else round(c * 9 / 5 + 32, 2), **values}
+        fields = ",".join(f"{f}={v}" for f, v in values.items() if v is not None)
         return f"{self.measurement},{self.tags} {fields} {row[0]}" if fields else None
 
     def push_pending(self, con):
@@ -372,6 +378,9 @@ def main():
     db_path = args.db or tracker.get("db") or str(HERE / "readings.db")
     port = args.port or int(tracker.get("port", 8680))
     kind = sens.get("type", "auto").lower()
+    unit = tracker.get("temperature_unit", "C").strip().upper()[:1]
+    if unit not in ("C", "F"):
+        raise SystemExit("[tracker] temperature_unit must be C or F")
 
     con = connect(db_path)
     init_db(con)
@@ -389,9 +398,9 @@ def main():
     threading.Thread(target=sampler, daemon=True, args=(
         db_path, sensor, float(sens.get("sample_every", 5)), stop)).start()
     if cfg.has_section("influxdb") and cfg["influxdb"].get("url"):
-        influx = Influx(cfg["influxdb"], name, sensor.kind)
+        influx = Influx(cfg["influxdb"], name, sensor.kind, fahrenheit=unit == "F")
         threading.Thread(target=influx.run, daemon=True, args=(db_path, stop)).start()
-    info = {"name": name, "sensor": sensor.kind.upper()}
+    info = {"name": name, "sensor": sensor.kind.upper(), "unit": unit}
     server = ThreadingHTTPServer(("0.0.0.0", port), make_handler(db_path, info))
     print(f"dashboard on http://0.0.0.0:{port}/  db: {db_path}", flush=True)
     try:

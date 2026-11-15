@@ -81,7 +81,8 @@ footer { color: var(--text-3); font-size: 12px; margin-top: 16px; }
 <script>
 const store = { get(k, d) { try { return localStorage.getItem(k) || d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
-let hours = +store.get('hours', 24), unit = store.get('unit', 'C');
+let hours = +store.get('hours', 24), unit = store.get('unit', ''), unitChosen = unit !== '';
+if (!unit) unit = 'C';
 let history = null, latest = null;
 
 const toUnit = c => unit === 'F' ? c * 9 / 5 + 32 : c;
@@ -220,13 +221,15 @@ async function refresh() {
     [latest, history] = await Promise.all([
       fetch('/api/latest').then(r => r.json()),
       fetch('/api/history?hours=' + hours).then(r => r.json())]);
+    // until someone picks a unit in this browser, follow the tracker's configured one
+    if (!unitChosen && latest.unit && latest.unit !== unit) { unit = latest.unit; syncButtons(); }
     renderTiles(); renderCharts();
   } catch { document.getElementById('updated').textContent = 'cannot reach the tracker'; }
 }
 document.getElementById('range').onclick = e => { if (!e.target.dataset.h) return;
   hours = +e.target.dataset.h; store.set('hours', hours); syncButtons(); refresh(); };
 document.getElementById('unit').onclick = e => { if (!e.target.dataset.u) return;
-  unit = e.target.dataset.u; store.set('unit', unit); syncButtons(); renderTiles(); renderCharts(); };
+  unit = e.target.dataset.u; unitChosen = true; store.set('unit', unit); syncButtons(); renderTiles(); renderCharts(); };
 let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(renderCharts, 150); });
 syncButtons(); refresh(); setInterval(refresh, 60000);
 </script>
